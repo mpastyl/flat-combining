@@ -33,7 +33,10 @@ int ERROR_VALUE=54;
 
 long long int glob_counter=0; 
 
+long long int count_enqs=0;
+long long int count_deqs=0;
 void lock_queue (struct queue_t * Q){
+
 
     while (1){
         if (!Q->lock){
@@ -122,17 +125,22 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
                 glob_counter++;
                 for(i=0 ;i<n; i++){
                     if(pub[i].pending){
-                        if (pub[i].op ==1) enqueue(Q,pub[i].val);
-                        else{
+                        if (pub[i].op ==1) {count_enqs++; enqueue(Q,pub[i].val);}
+                        else if(pub[i].op==0){
+                           count_deqs++;
                            res=dequeue(Q,&pub[i].val);
-                           if(!res) pub[i].val = ERROR_VALUE;
+                           if(!res) 
+                                    pub[i].val = ERROR_VALUE;
                         }
-                        pub[i].response = 1;
+                        else printf("wtf!!  %d \n",pub[i].op);
                         pub[i].pending = 0;
+                        pub[i].response = 1;
                     }
                 }
+                int temp_val=pub[tid].val;
+                pub[tid].response=0;
                 Q->lock=0;
-                return (pub[tid].val);
+                return temp_val;
             }
         }
    }
@@ -192,8 +200,8 @@ int main(int argc, char *argv[]){
     for(i=0;i<num_threads;i++){
         for(j=0; j<count/num_threads;j++){
                 try_access(Q,pub,1,i,num_threads);
-                res=try_access(Q,pub,0,0,num_threads);
-                //if(res!=ERROR_VALUE) printf("%d\n",res);
+                res=try_access(Q,pub,0,9,num_threads);
+                if(res==ERROR_VALUE) printf("%d\n",res);
             
         }
     }
@@ -212,7 +220,11 @@ int main(int argc, char *argv[]){
     }
     timer_stop(timer2);
     printf("total delay %lf\n",timer_report_sec(timer2));
-    //printqueue(Q);
+    printqueue(Q);
+
+    printf("total enqs %ld\n",count_enqs);
+    printf("total deqs %ld\n",count_deqs);
+
     
     //------------------------------------------------------
     /*double thread_time;
