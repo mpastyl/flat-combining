@@ -18,14 +18,20 @@ struct queue_t{
 
 
 struct pub_record{ //TODO: pad?? to avoid false sharing.
+    long long int temp;
     int pending; //1 = waiting for op
+    long long int temp2;
     int op; // operation 1= enqueue , 0= dequeue
+    long long int temp3;
     int val;
+    long long int temp4;
     int response; //1 means reposponse is here!
+    long long int temp5;
 };
 
 int ERROR_VALUE=54;
 
+long long int glob_counter=0; 
 
 void lock_queue (struct queue_t * Q){
 
@@ -104,7 +110,7 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
     while (1){
         if(Q->lock){
             count=0;
-            while((!pub[tid].response)&&(count<1000000)) count++; //check periodicaly for lock
+            while((!pub[tid].response)&&(count<10000000)) count++; //check periodicaly for lock
             if(pub[tid].response ==1){
                 pub[tid].response=0;
                 return (pub[tid].val);
@@ -113,6 +119,7 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
         else{
             if(__sync_lock_test_and_set(&(Q->lock),1)) continue;// must spin backto response
             else{
+                glob_counter++;
                 for(i=0 ;i<n; i++){
                     if(pub[i].pending){
                         if (pub[i].op ==1) enqueue(Q,pub[i].val);
@@ -157,6 +164,7 @@ int main(int argc, char *argv[]){
     num_threads=atoi(argv[1]);
     count =atoi(argv[2]);
 
+
 	struct queue_t * Q = (struct queue_t *) malloc(sizeof(struct queue_t));
 
     struct pub_record pub[num_threads];
@@ -193,6 +201,17 @@ int main(int argc, char *argv[]){
     double timer_val = timer_report_sec(timer);
     printf("num_threads %d enq-deqs total %d\n",num_threads,count);
     printf("thread number %d total time %lf\n",omp_get_thread_num(),timer_val);
+    printf("glob counter %ld \n",glob_counter);
+
+    timer_tt * timer2=timer_init();
+    timer_start(timer2);
+    int k=0;
+    for(k=0;k<glob_counter;k++){
+        for(i=0;i<num_threads;i++)
+            res=pub[i].pending;
+    }
+    timer_stop(timer2);
+    printf("total delay %lf\n",timer_report_sec(timer2));
     //printqueue(Q);
     
     //------------------------------------------------------
