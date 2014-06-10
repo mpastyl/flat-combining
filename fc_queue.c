@@ -29,7 +29,7 @@ struct pub_record{ //TODO: pad?? to avoid false sharing.
     long long int temp5;
 };
 
-int ERROR_VALUE=54;
+int ERROR_VALUE=5004;
 
 long long int glob_counter=0; 
 
@@ -50,16 +50,25 @@ void unlock_queue(struct queue_t * Q){
     Q->lock = 0;
 }
 
-void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init count?
+int locks[4];
+
+void initialize(struct queue_t * Q,struct pub_record * pub0,struct pub_record * pub1,struct pub_record * pub2,struct pub_record * pub3,int n){//TODO: init count?
 	int i;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
 	node->next = NULL;
 	Q->Head = node; //TODO: check this
 	Q->Tail = node;
     Q->lock = 0;
+    for(i=0;i<4;i++) locks[i]=0;
     for(i=0; i <n ;i++){
-        pub[i].pending = 0;
-        pub[i].response =0;
+        pub0[i].pending = 0;
+        pub0[i].response =0;
+        pub1[i].pending = 0;
+        pub1[i].response =0;
+        pub2[i].pending = 0;
+        pub2[i].response =0;
+        pub3[i].pending = 0;
+        pub3[i].response =0;
     }
 }
 
@@ -101,17 +110,24 @@ int dequeue(struct queue_t * Q, int * val){
            
 }
 
+
+
+
+
+
 int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
 
-    int tid=  omp_get_thread_num();
+    int tid=  omp_get_thread_num()%16;
     int i,res,count;
     //1
-    
+    int lock_indx=omp_get_thread_num()/16;
+
+
     pub[tid].op = operation;
     pub[tid].val = val;
     pub[tid].pending=1;
     while (1){
-        if(Q->lock){
+        if(locks[lock_indx]){
             count=0;
             while((!pub[tid].response)&&(count<10000000)) count++; //check periodicaly for lock
             if(pub[tid].response ==1){
@@ -120,8 +136,9 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
             }
         }
         else{
-            if(__sync_lock_test_and_set(&(Q->lock),1)) continue;// must spin backto response
+            if(__sync_lock_test_and_set(&(locks[lock_indx]),1)) continue;// must spin backto response
             else{
+                lock_queue(Q);
                 glob_counter++;
                 for(i=0 ;i<n; i++){
                     if(pub[i].pending){
@@ -139,7 +156,8 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
                 }
                 int temp_val=pub[tid].val;
                 pub[tid].response=0;
-                Q->lock=0;
+                unlock_queue(Q);
+                locks[lock_indx]=0;
                 return temp_val;
             }
         }
@@ -175,10 +193,13 @@ int main(int argc, char *argv[]){
 
 	struct queue_t * Q = (struct queue_t *) malloc(sizeof(struct queue_t));
 
-    struct pub_record pub[num_threads];
+    struct pub_record pub0[num_threads];
+    struct pub_record pub1[num_threads];
+    struct pub_record pub2[num_threads];
+    struct pub_record pub3[num_threads];
     //Q->Head =  NULL;
     //Q->Tail =  NULL;
-	initialize(Q,pub,num_threads);
+	initialize(Q,pub0,pub1,pub2,pub3,16);
     /*result = try_access(Q,pub,1,5,num_threads);
     result = try_access(Q,pub,1,7,num_threads);
     result = try_access(Q,pub,0,5,num_threads);
@@ -193,30 +214,54 @@ int main(int argc, char *argv[]){
     //if (res) printf("Dequeued %d \n",val);
     enqueue(Q,1);
     printqueue(Q)*/
-    
-    timer_tt * timer = timer_init();
-    timer_start(timer);
-    #pragma omp parallel for num_threads(num_threads) shared(Q,pub) private(res,val,i,j)
+    int tid,c,k;
+    double timer_val;
+    srand(time(NULL));
+    #pragma omp parallel for num_threads(num_threads) shared(Q,pub0,pub1,pub2,pub3) private(res,val,i,j,tid,c,k) reduction(+:timer_val)
     for(i=0;i<num_threads;i++){
+        tid=omp_get_thread_num();
+        timer_tt * timer = timer_init();
+        timer_start(timer);
         for(j=0; j<count/num_threads;j++){
-                try_access(Q,pub,1,i,num_threads);
-                res=try_access(Q,pub,0,9,num_threads);
-                if(res==ERROR_VALUE) printf("%d\n",res);
-            
+                c=rand()%1000;
+                if(tid<16){
+                    try_access(Q,pub0,1,i,16);
+                    for(k=0;k<c;k++);
+                    res=try_access(Q,pub0,0,9,16);
+                    if(res==ERROR_VALUE) printf("%d\n",res);
+                }
+                else if(tid<32){
+                    try_access(Q,pub1,1,i,16);
+                    for(k=0;k<c;k++);
+                    res=try_access(Q,pub1,0,9,16);
+                    if(res==ERROR_VALUE) printf("%d\n",res);
+                }
+                else if(tid<48){
+                    try_access(Q,pub2,1,i,16);
+                    for(k=0;k<c;k++);
+                    res=try_access(Q,pub2,0,9,16);
+                    if(res==ERROR_VALUE) printf("%d\n",res);
+                }
+                else{
+                    try_access(Q,pub3,1,i,16);
+                    for(k=0;k<c;k++);
+                    res=try_access(Q,pub3,0,9,16);
+                    if(res==ERROR_VALUE) printf("%d\n",res);
+                }
         }
+        timer_stop(timer);
+        timer_val = timer_report_sec(timer);
+        printf("thread number %d total time %lf\n",omp_get_thread_num(),timer_val);
     }
-    timer_stop(timer);
-    double timer_val = timer_report_sec(timer);
-    printf("num_threads %d enq-deqs total %d\n",num_threads,count);
-    printf("thread number %d total time %lf\n",omp_get_thread_num(),timer_val);
+    printf("average time  %lf\n",timer_val/(double)num_threads);
     printf("glob counter %ld \n",glob_counter);
 
     timer_tt * timer2=timer_init();
     timer_start(timer2);
-    int k=0;
+    
     for(k=0;k<glob_counter;k++){
         for(i=0;i<num_threads;i++)
-            res=pub[i].pending;
+            res=pub0[i].pending;
     }
     timer_stop(timer2);
     printf("total delay %lf\n",timer_report_sec(timer2));
