@@ -2,19 +2,57 @@
 #include <stdlib.h>
 #include "timers_lib.h"
 
+struct pointer_t{
+    __int128 both;
+};
+
 
 
 
 struct node_t{
 	int value;//TODO: maybe change this
-	struct node_t * next;
+	struct pointer_t next;
 };
 
 struct queue_t{
-	struct node_t * Head;
-	struct node_t * Tail;
-    int lock;
+    struct pointer_t  Head;
+    struct pointer_t  Tail;
 };
+
+
+__int128 get_count(__int128 a){
+
+    __int128 b = a >>64;
+    return b;
+}
+
+__int128 get_pointer(__int128 a){
+    __int128 b = a << 64;
+    b= b >>64;
+    return b;
+}
+
+__int128 set_count(__int128  a, __int128 count){
+    __int128 count_temp =  count << 64;
+    __int128 b = get_pointer(a);
+    b = b | count_temp;
+    return b;
+}
+
+__int128 set_pointer(__int128 a, __int128 ptr){
+    __int128 b = 0;
+    __int128 c = get_count(a);
+    b = set_count(b,c);
+    ptr = get_pointer(ptr);
+    b= b | ptr;
+    return b;
+}
+
+__int128 set_both(__int128 a, __int128 ptr, __int128 count){
+    a=set_pointer(a,ptr);
+    a=set_count(a,count);
+    return a;
+}
 
 
 struct pub_record{ //TODO: pad?? to avoid false sharing.
@@ -35,6 +73,7 @@ long long int glob_counter=0;
 
 long long int count_enqs=0;
 long long int count_deqs=0;
+/*
 void lock_queue (struct queue_t * Q){
 
 
@@ -50,15 +89,19 @@ void unlock_queue(struct queue_t * Q){
     Q->lock = 0;
 }
 
+*/
 int locks[4];
 
 void initialize(struct queue_t * Q,struct pub_record * pub0,struct pub_record * pub1,struct pub_record * pub2,struct pub_record * pub3,int n){//TODO: init count?
 	int i;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
-	node->next = NULL;
-	Q->Head = node; //TODO: check this
-	Q->Tail = node;
-    Q->lock = 0;
+	node->next.both = NULL;
+
+    Q->Head.both= set_both(Q->Head.both,node,0);
+    Q->Tail.both= set_both(Q->Tail.both,node,0);
+
+    
+    //Q->lock = 0;
     for(i=0;i<4;i++) locks[i]=0;
     for(i=0; i <n ;i++){
         pub0[i].pending = 0;
@@ -72,7 +115,7 @@ void initialize(struct queue_t * Q,struct pub_record * pub0,struct pub_record * 
     }
 }
 
-
+/*
 void enqueue(struct queue_t * Q, int val){
 	
     int store = 0;
@@ -109,9 +152,93 @@ int dequeue(struct queue_t * Q, int * val){
     return 1;
            
 }
+*/
+
+
+void enqueue(struct queue_t * Q, int val){
+
+    struct pointer_t tail;
+    __int128 new_to_set;
+    int temp;
+    struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
+    node->value = val;
+    node->next.both = 0;
+    while (1){
+        tail = Q->Tail;
+        struct pointer_t next_p = ((struct node_t *)get_pointer(tail.both))->next;
+        if (tail.both == Q->Tail.both){
+            if (get_pointer(next_p.both) == 0){
+                new_to_set =set_both(new_to_set,node,get_count(next_p.both) +(__int128)1);
+                if (__sync_bool_compare_and_swap(&(((struct node_t * )get_pointer(tail.both))->next.both),next_p.both,new_to_set))
+                    break;
+            }
+            else{
+                new_to_set=set_both(new_to_set,next_p.both,get_count(tail.both)+(__int128)1);
+                temp = __sync_bool_compare_and_swap(&Q->Tail.both,tail.both,new_to_set);
+            }
+        }
+    }
+    new_to_set=set_both(new_to_set,node,get_count(tail.both)+(__int128)1);
+    temp = __sync_bool_compare_and_swap(&Q->Tail.both,tail.both,new_to_set);
+}
 
 
 
+int dequeue(struct queue_t * Q,int * pvalue){
+
+    struct pointer_t head;
+    struct pointer_t tail;
+    struct pointer_t next;
+    int  temp;
+    int first_val;
+    __int128 new_to_set;
+    while(1){
+        head =  Q->Head;
+        first_val=((struct node_t *)get_pointer(head.both))->value;
+        tail =  Q->Tail;
+        next =  ((struct node_t *)get_pointer(head.both))->next;
+        if ( head.both == Q->Head.both){
+            if (head.both == tail.both){
+                if ( get_pointer(next.both) == 0)
+                    return 0;
+                new_to_set =  set_both(new_to_set,next.both,get_count(tail.both) +(__int128)1);
+                temp = __sync_bool_compare_and_swap(&Q->Tail.both,tail.both,new_to_set);
+            }
+            else{
+                //if ((head==Q->Head) &&(first_val!=((struct node_t *)get_pointer(head))->value)) printf("change detected!\n");
+                *pvalue =((struct node_t *)get_pointer(next.both))->value;
+                new_to_set = set_both(new_to_set,next.both,get_count(head.both)+(__int128)1);
+                if( __sync_bool_compare_and_swap(&Q->Head.both,head.both,new_to_set))
+                    break;
+            }
+        }
+    }
+    //printf(" about to free %p \n",head);
+    free(get_pointer(head.both));
+    return 1;
+}
+
+
+void printqueue(struct queue_t * Q){
+
+    struct pointer_t curr ;
+    struct pointer_t next ;
+
+    curr = Q->Head;
+    //printf(" in printqueue curr = %p\n",curr);
+    next = ((struct node_t * )get_pointer(Q->Head.both))->next;
+    //printf(" in printqueue next = %p\n",next);
+    while ((get_pointer(curr.both) != get_pointer(Q->Tail.both))&&(get_pointer(curr.both)!=0)){
+    //printf(" in printqueue curr = %p\n",curr);
+    //printf(" in printqueue next = %p\n",next);
+        printf("%d ",((struct node_t * )get_pointer(curr.both))->value);
+        curr = next;
+        if (get_pointer(next.both)) next = ((struct node_t * )get_pointer(curr.both))->next;
+    }
+    //printf("%d ",((struct node_t * )get_pointer(curr))->value);
+    printf("\n");
+
+}
 
 
 
@@ -138,7 +265,6 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
         else{
             if(__sync_lock_test_and_set(&(locks[lock_indx]),1)) continue;// must spin backto response
             else{
-                lock_queue(Q);
                 glob_counter++;
                 for(i=0 ;i<n; i++){
                     if(pub[i].pending){
@@ -156,7 +282,6 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
                 }
                 int temp_val=pub[tid].val;
                 pub[tid].response=0;
-                unlock_queue(Q);
                 locks[lock_indx]=0;
                 return temp_val;
             }
@@ -164,7 +289,7 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
    }
 }
 
-
+/*
 void printqueue(struct queue_t * Q){
     
     struct node_t * curr ;
@@ -181,7 +306,7 @@ void printqueue(struct queue_t * Q){
     printf("\n");
     
 }
-
+*/
 
 int main(int argc, char *argv[]){
 
