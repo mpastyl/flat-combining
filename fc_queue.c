@@ -4,9 +4,11 @@
 
 
 
+int MAX_VALUES=16;
 
 struct node_t{
-	int value;//TODO: maybe change this
+    int val_count;
+	int value[16];//TODO: maybe change this
 	struct node_t * next;
 };
 
@@ -29,7 +31,7 @@ struct pub_record{ //TODO: pad?? to avoid false sharing.
     long long int temp5;
 };
 
-int ERROR_VALUE=54;
+int ERROR_VALUE=500004;
 
 long long int glob_counter=0; 
 
@@ -54,6 +56,7 @@ void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init c
 	int i;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
 	node->next = NULL;
+    node->val_count=1;
 	Q->Head = node; //TODO: check this
 	Q->Tail = node;
     Q->lock = 0;
@@ -66,7 +69,7 @@ void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init c
 
 void enqueue(struct queue_t * Q, int val){
 	
-    int store = 0;
+    /*int stored = 0;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
     node->value =  val;
     node->next = NULL;
@@ -79,13 +82,26 @@ void enqueue(struct queue_t * Q, int val){
     Q->Tail = node;
     
     //__sync_lock_test_and_set(&Q->lock,0);
-
+    */
+    struct node_t *  tail=Q->Tail;
+    if(tail->val_count!=MAX_VALUES){// fat node not full
+        tail->value[tail->val_count]=val;
+        tail->val_count++;
+    }
+    else{
+        struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
+        node->value[0]=val;
+        node->next=NULL;
+        node->val_count=1;
+        Q->Tail->next=node;
+        Q->Tail=node;
+    }
 }
 
 
 int dequeue(struct queue_t * Q, int * val){
     
-    
+    /*
     struct node_t * node = Q->Head;
     struct node_t * next = node->next;
     //struct node_t * tail = Q->Tail;
@@ -98,7 +114,24 @@ int dequeue(struct queue_t * Q, int * val){
     free(node);
     
     return 1;
-           
+    */
+    struct node_t * head=Q->Head; //TODO: fix empty queue!!
+    struct node_t * next=head->next;
+    if((head->val_count==0)&&(next==NULL))return 0;
+    if(head->val_count!=0){
+        head->val_count=head->val_count-1;
+        *val=head->value[head->val_count];
+    }
+    else{
+        Q->Head=Q->Head->next;
+        free(head);
+        head=Q->Head;
+        next=head->next;
+        if((next==NULL)&&(head->val_count==0)) return 0;
+        head->val_count=head->val_count-1;
+        *val=head->value[head->val_count];
+    }
+    return 1;
 }
 
 int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
@@ -151,11 +184,13 @@ void printqueue(struct queue_t * Q){
     
     struct node_t * curr ;
     struct node_t * next ;
-    
+    int i;
     curr = Q->Head;
     next = Q->Head->next;
     while (curr != Q->Tail){
-        printf("%d ",curr->value);
+        for(i=0;i<curr->val_count;i++){
+            printf("%d ",curr->value[i]);
+        }
         curr = next;
         next = curr ->next;
     }
@@ -193,55 +228,76 @@ int main(int argc, char *argv[]){
     //if (res) printf("Dequeued %d \n",val);
     enqueue(Q,1);
     printqueue(Q)*/
-    
-    timer_tt * timer = timer_init();
-    timer_start(timer);
-    #pragma omp parallel for num_threads(num_threads) shared(Q,pub) private(res,val,i,j)
-    for(i=0;i<num_threads;i++){
-        for(j=0; j<count/num_threads;j++){
-                try_access(Q,pub,1,i,num_threads);
-                res=try_access(Q,pub,0,9,num_threads);
-                if(res==ERROR_VALUE) printf("%d\n",res);
-            
-        }
-    }
-    timer_stop(timer);
-    double timer_val = timer_report_sec(timer);
-    printf("num_threads %d enq-deqs total %d\n",num_threads,count);
-    printf("thread number %d total time %lf\n",omp_get_thread_num(),timer_val);
-    printf("glob counter %ld \n",glob_counter);
 
+    //try_access(Q,pub,1,5,num_threads);
+    //try_access(Q,pub,1,MAX_VALUES,num_threads);
+
+srand(time(NULL));
+    timer_tt * timer;
+    int c,k;
+    timer_tt * glob_timer=timer_init();
+    timer_start(glob_timer); 
+    long int sum=0;
+    double total_time=0;
+
+
+    #pragma omp parallel for num_threads(num_threads) shared(Q) private(res,val,i,j,c,timer,k) reduction(+:total_time) reduction(+:sum) 
+    for(i=0;i<num_threads;i++){
+        c=50;
+        timer=timer_init();
+        timer_start(timer);
+        sum=0;
+         for (j=0;j<count/num_threads;j++){
+                try_access(Q,pub,1,i,num_threads);
+                sum+=c;
+                for(k=0;k<c;k++);
+                res = try_access(Q,pub,0,9,num_threads);
+                if(res==ERROR_VALUE) printf("%d\n",res);
+                //if (res) printf("thread %d  dequeued --> %d\n",omp_get_thread_num(),val);
+         }
+         timer_stop(timer);
+         total_time=timer_report_sec(timer);
+         //printf("threads number %d total time %lf\n",omp_get_thread_num(),total_time);
+         //printf("sum =  %ld\n",sum);
+         /*timer_tt * timer2=timer_init();
+         timer_start(timer2);
+         for(k=0;k<sum;k++);
+         timer_stop(timer2);
+         total_time=timer_res-timer_report_sec(timer2);
+         printf("delay time %lf\n",timer_report_sec(timer2));
+         //printf("threads number %d  time %lf\n",omp_get_thread_num(),total_time);
+         */
+    }
+   // printf("new total_time %lf\n",total_time);
+   // printf("new sum %ld\n",sum);
+    double avg_total_time=total_time/(double)num_threads;
+    printf("avg total time %lf\n",avg_total_time);
+/*    long int avg_sum=sum/num_threads;
+    printf("avg sum %ld\n",avg_sum);
     timer_tt * timer2=timer_init();
     timer_start(timer2);
-    int k=0;
-    for(k=0;k<glob_counter;k++){
-        for(i=0;i<num_threads;i++)
-            res=pub[i].pending;
-    }
+    for(k=0;k<avg_sum;k++);
     timer_stop(timer2);
-    printf("total delay %lf\n",timer_report_sec(timer2));
-    printqueue(Q);
+    double avg_delay=timer_report_sec(timer2);
+   // printf("average delay time %lf\n",avg_delay);
+    //printf("threads number %d  time %lf\n",omp_get_thread_num(),total_time);
 
-    printf("total enqs %ld\n",count_enqs);
-    printf("total deqs %ld\n",count_deqs);
+*/
+    //printf("average time %lf\n",avg_total_time - avg_delay);
+    /*timer_stop(glob_timer);
+    printf("global time %lf\n",timer_report_sec(glob_timer));
 
-    
-    //------------------------------------------------------
-    /*double thread_time;
-    timer_tt * timer;
-    #pragma omp parallel for num_threads(num_threads) shared(Q) private(timer,j,i,thread_time)
-    for(i=0;i<num_threads;i++){    
-        timer = timer_init();
-        timer_start(timer);
-        lock_queue(Q);
-        for( j=0; j<100;j++)
-            printf("thread %d in critical \n",omp_get_thread_num());
-        unlock_queue(Q);
-        timer_stop(timer);
-        thread_time = timer_report_sec(timer);
-        printf("thread %d  time %lf\n",omp_get_thread_num(),thread_time);
-    }
+    glob_timer=timer_init();
+    timer_start(glob_timer);
+    for(i=0;i<sum;i++);
+    timer_stop(glob_timer);
+    printf("test delay %lf/n",timer_report_sec(glob_timer));
     */
+    //printqueue(Q);
+    //timer_stop(timer);
+    //printf("num_threasd %d  enq-deqs total %d \n",num_threads,count);
+    //printf("Total time  %lf \n",time_res);
+
 	return 1;
 }
 	
