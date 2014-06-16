@@ -2,57 +2,24 @@
 #include <stdlib.h>
 #include "timers_lib.h"
 
-struct pointer_t{
-    __int128 both;
-};
 
 
 
+
+int MAX_VALUES=16;
 
 struct node_t{
-	int value;//TODO: maybe change this
-	struct pointer_t next;
+    int val_count;
+    int value[16];//TODO: maybe change this
+    struct node_t * next;
 };
 
 struct queue_t{
-    struct pointer_t  Head;
-    struct pointer_t  Tail;
+    struct node_t * Head;
+    struct node_t * Tail;
 };
 
 
-__int128 get_count(__int128 a){
-
-    __int128 b = a >>64;
-    return b;
-}
-
-__int128 get_pointer(__int128 a){
-    __int128 b = a << 64;
-    b= b >>64;
-    return b;
-}
-
-__int128 set_count(__int128  a, __int128 count){
-    __int128 count_temp =  count << 64;
-    __int128 b = get_pointer(a);
-    b = b | count_temp;
-    return b;
-}
-
-__int128 set_pointer(__int128 a, __int128 ptr){
-    __int128 b = 0;
-    __int128 c = get_count(a);
-    b = set_count(b,c);
-    ptr = get_pointer(ptr);
-    b= b | ptr;
-    return b;
-}
-
-__int128 set_both(__int128 a, __int128 ptr, __int128 count){
-    a=set_pointer(a,ptr);
-    a=set_count(a,count);
-    return a;
-}
 
 
 struct pub_record{ //TODO: pad?? to avoid false sharing.
@@ -90,15 +57,16 @@ void unlock_queue(struct queue_t * Q){
 }
 
 */
+struct pub_record glob_record[4];
 int locks[4];
-
+int global_lock=0;
 void initialize(struct queue_t * Q,struct pub_record * pub0,struct pub_record * pub1,struct pub_record * pub2,struct pub_record * pub3,int n){//TODO: init count?
 	int i;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
-	node->next.both = NULL;
+	node->next = NULL;
 
-    Q->Head.both= set_both(Q->Head.both,node,0);
-    Q->Tail.both= set_both(Q->Tail.both,node,0);
+    Q->Head= node;
+    Q->Tail= node;
 
     
     //Q->lock = 0;
@@ -112,6 +80,7 @@ void initialize(struct queue_t * Q,struct pub_record * pub0,struct pub_record * 
         pub2[i].response =0;
         pub3[i].pending = 0;
         pub3[i].response =0;
+
     }
 }
 
@@ -154,7 +123,7 @@ int dequeue(struct queue_t * Q, int * val){
 }
 */
 
-
+/*
 void enqueue(struct queue_t * Q, int val){
 
     struct pointer_t tail;
@@ -218,7 +187,46 @@ int dequeue(struct queue_t * Q,int * pvalue){
     return 1;
 }
 
+*/
+void enqueue(struct queue_t * Q, int val){
 
+    struct node_t *  tail=Q->Tail;
+    if(tail->val_count!=MAX_VALUES){// fat node not full
+        tail->value[tail->val_count]=val;
+        tail->val_count++;
+    }
+    else{
+        struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
+        node->value[0]=val;
+        node->next=NULL;
+        node->val_count=1;
+        Q->Tail->next=node;
+        Q->Tail=node;
+    }
+}
+
+
+int dequeue(struct queue_t * Q, int * val){
+
+    struct node_t * head=Q->Head; //TODO: fix empty queue!!
+    struct node_t * next=head->next;
+    if((head->val_count==0)&&(next==NULL))return 0;
+    if(head->val_count!=0){
+        head->val_count=head->val_count-1;
+        *val=head->value[head->val_count];
+    }
+    else{
+        Q->Head=Q->Head->next;
+        free(head);
+        head=Q->Head;
+        next=head->next;
+        if((next==NULL)&&(head->val_count==0)) return 0;
+        head->val_count=head->val_count-1;
+        *val=head->value[head->val_count];
+    }
+    return 1;
+}
+/*
 void printqueue(struct queue_t * Q){
 
     struct pointer_t curr ;
@@ -239,8 +247,53 @@ void printqueue(struct queue_t * Q){
     printf("\n");
 
 }
+*/
 
+int try_access_2(struct queue_t * Q,int operation, int val,int n){
 
+    int tid=  omp_get_thread_num()/16;
+    int i,res,count;
+    //1
+
+    struct pub_record * pub=glob_record;
+    pub[tid].op = operation;
+    pub[tid].val = val;
+    pub[tid].pending=1;
+    while (1){
+        if(global_lock){
+            count=0;
+            while((!pub[tid].response)&&(count<10000000)) count++; //check periodicaly for lock
+            if(pub[tid].response ==1){
+                pub[tid].response=0;
+                return (pub[tid].val);
+            }
+        }
+        else{
+            if(__sync_lock_test_and_set(&(global_lock),1)) continue;// must spin backto response
+            else{
+                //glob_counter++;
+                for(i=0 ;i<n; i++){
+                    if(pub[i].pending){
+                        if (pub[i].op ==1) {count_enqs++; enqueue(Q,pub[i].val);}
+                        else if(pub[i].op==0){
+                           count_deqs++;
+                           res=dequeue(Q,&pub[i].val);
+                           if(res=ERROR_VALUE) 
+                                    pub[i].val = ERROR_VALUE;
+                        }
+                        else printf("wtf!!  %d \n",pub[i].op);
+                        pub[i].pending = 0;
+                        pub[i].response = 1;
+                    }
+                }
+                int temp_val=pub[tid].val;
+                pub[tid].response=0;
+                global_lock=0;
+                return temp_val;
+            }
+        }
+   }
+}
 
 int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
 
@@ -268,10 +321,13 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
                 glob_counter++;
                 for(i=0 ;i<n; i++){
                     if(pub[i].pending){
-                        if (pub[i].op ==1) {count_enqs++; enqueue(Q,pub[i].val);}
+                        if (pub[i].op ==1) {
+                            //count_enqs++; 
+                            try_access_2(Q,1,pub[i].val,4);
+                        }
                         else if(pub[i].op==0){
-                           count_deqs++;
-                           res=dequeue(Q,&pub[i].val);
+                           //count_deqs++;
+                           res=try_access_2(Q,0,9,4);
                            if(!res) 
                                     pub[i].val = ERROR_VALUE;
                         }
@@ -322,6 +378,7 @@ int main(int argc, char *argv[]){
     struct pub_record pub1[num_threads];
     struct pub_record pub2[num_threads];
     struct pub_record pub3[num_threads];
+    //struct pub_record glob_record[4];
     //Q->Head =  NULL;
     //Q->Tail =  NULL;
 	initialize(Q,pub0,pub1,pub2,pub3,16);
@@ -390,7 +447,7 @@ int main(int argc, char *argv[]){
     }
     timer_stop(timer2);
     printf("total delay %lf\n",timer_report_sec(timer2));
-    printqueue(Q);
+    //printqueue(Q);
 
     printf("total enqs %ld\n",count_enqs);
     printf("total deqs %ld\n",count_deqs);
