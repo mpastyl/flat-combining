@@ -250,51 +250,6 @@ void printqueue(struct queue_t * Q){
 }
 */
 
-int try_access_2(struct queue_t * Q,int operation, int val,int n){
-
-    int tid=  omp_get_thread_num()/16;
-    int i,res,count;
-    //1
-
-    struct pub_record * pub=glob_record;
-    pub[tid].op = operation;
-    pub[tid].val = val;
-    pub[tid].pending=1;
-    while (1){
-        if(global_lock){
-            count=0;
-            while((!pub[tid].response)&&(count<10000000)) count++; //check periodicaly for lock
-            if(pub[tid].response ==1){
-                pub[tid].response=0;
-                return (pub[tid].val);
-            }
-        }
-        else{
-            if(__sync_lock_test_and_set(&(global_lock),1)) continue;// must spin backto response
-            else{
-                //glob_counter++;
-                for(i=0 ;i<n; i++){
-                    if(pub[i].pending){
-                        if (pub[i].op ==1) {count_enqs++; enqueue(Q,pub[i].val);}
-                        else if(pub[i].op==0){
-                           count_deqs++;
-                           res=dequeue(Q,&pub[i].val);
-                           if(res=ERROR_VALUE) 
-                                    pub[i].val = ERROR_VALUE;
-                        }
-                        //else printf("wtf!!  %d \n",pub[i].op);
-                        pub[i].pending = 0;
-                        pub[i].response = 1;
-                    }
-                }
-                int temp_val=pub[tid].val;
-                pub[tid].response=0;
-                global_lock=0;
-                return temp_val;
-            }
-        }
-   }
-}
 
 int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
 
