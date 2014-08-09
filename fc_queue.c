@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "timers_lib.h"
-
+#include <sched.h>
 
 
 int MAX_VALUES=16;
@@ -52,7 +52,7 @@ void unlock_queue(struct queue_t * Q){
     Q->lock = 0;
 }
 
-void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init count?
+void initialize(struct queue_t * Q,struct pub_record * pub_enq,struct pub_record * pub_deq,int n){//TODO: init count?
 	int i;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
 	node->next = NULL;
@@ -61,8 +61,10 @@ void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init c
 	Q->Tail = node;
     Q->lock = 0;
     for(i=0; i <n ;i++){
-        pub[i].pending = 0;
-        pub[i].response =0;
+        pub_enq[i].pending = 0;
+        pub_enq[i].response =0;
+        pub_deq[i].pending = 0;
+        pub_deq[i].response =0;
     }
 }
 
@@ -140,6 +142,7 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
     int i,res,count;
     //1
     
+    
     pub[tid].op = operation;
     pub[tid].val = val;
     pub[tid].pending=1;
@@ -179,7 +182,6 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
    }
 }
 
-
 void printqueue(struct queue_t * Q){
     
     struct node_t * curr ;
@@ -210,10 +212,11 @@ int main(int argc, char *argv[]){
 
 	struct queue_t * Q = (struct queue_t *) malloc(sizeof(struct queue_t));
 
-    struct pub_record pub[num_threads];
+    struct pub_record pub_enq[num_threads];
+    struct pub_record pub_deq[num_threads];
     //Q->Head =  NULL;
     //Q->Tail =  NULL;
-	initialize(Q,pub,num_threads);
+	initialize(Q,pub_enq,pub_deq,num_threads);
     /*result = try_access(Q,pub,1,5,num_threads);
     result = try_access(Q,pub,1,7,num_threads);
     result = try_access(Q,pub,0,5,num_threads);
@@ -244,16 +247,17 @@ srand(time(NULL));
     #pragma omp parallel for num_threads(num_threads) shared(Q) private(res,val,i,j,c,timer,k) reduction(+:total_time) reduction(+:sum) 
     for(i=0;i<num_threads;i++){
         c=50;
+        //printf("thread number %d cpuid %d\n",omp_get_thread_num(),sched_getcpu());
         timer=timer_init();
         timer_start(timer);
         sum=0;
          for (j=0;j<count/num_threads;j++){
-                try_access(Q,pub,1,i,num_threads);
+                try_access(Q,pub_enq,1,i,num_threads);
                 sum+=c;
                 for(k=0;k<c;k++);
-                res = try_access(Q,pub,0,9,num_threads);
+                res = try_access(Q,pub_deq,0,9,num_threads);
                 if(res==ERROR_VALUE) printf("%d\n",res);
-                //if (res) printf("thread %d  dequeued --> %d\n",omp_get_thread_num(),val);
+                //else printf("thread %d  dequeued --> %d\n",omp_get_thread_num(),res);
          }
          timer_stop(timer);
          total_time=timer_report_sec(timer);
@@ -272,6 +276,8 @@ srand(time(NULL));
    // printf("new sum %ld\n",sum);
     double avg_total_time=total_time/(double)num_threads;
     printf("avg total time %lf\n",avg_total_time);
+    timer_stop(glob_timer);
+    printf("glob timer %lf\n",timer_report_sec(glob_timer));
 /*    long int avg_sum=sum/num_threads;
     printf("avg sum %ld\n",avg_sum);
     timer_tt * timer2=timer_init();
@@ -293,7 +299,7 @@ srand(time(NULL));
     timer_stop(glob_timer);
     printf("test delay %lf/n",timer_report_sec(glob_timer));
     */
-    //printqueue(Q);
+    printqueue(Q);
     //timer_stop(timer);
     //printf("num_threasd %d  enq-deqs total %d \n",num_threads,count);
     //printf("Total time  %lf \n",time_res);
