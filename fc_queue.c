@@ -1,13 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "timers_lib.h"
-
+#include <sched.h>
 
 
 int MAX_VALUES=16;
 
 struct node_t{
-    int val_count;
+    int enq_count;
+    int deq_count;
 	int value[16];//TODO: maybe change this
 	struct node_t * next;
 };
@@ -56,7 +57,8 @@ void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init c
 	int i;
     struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
 	node->next = NULL;
-    node->val_count=1;
+    node->enq_count=0;
+    node->deq_count=0;
 	Q->Head = node; //TODO: check this
 	Q->Tail = node;
     Q->lock = 0;
@@ -68,31 +70,18 @@ void initialize(struct queue_t * Q,struct pub_record * pub,int n){//TODO: init c
 
 
 void enqueue(struct queue_t * Q, int val){
-	
-    /*int stored = 0;
-    struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
-    node->value =  val;
-    node->next = NULL;
-    //while(__sync_lock_test_and_set(&Q->lock,1));
-    //#pragma omp critical
-    
-    //struct node_t * tail = Q->Tail;
-    //tail->next =node;
-    Q->Tail->next=node;
-    Q->Tail = node;
-    
-    //__sync_lock_test_and_set(&Q->lock,0);
-    */
+
     struct node_t *  tail=Q->Tail;
-    if(tail->val_count!=MAX_VALUES){// fat node not full
-        tail->value[tail->val_count]=val;
-        tail->val_count++;
+    if(tail->enq_count!=MAX_VALUES){// fat node not full
+        tail->value[tail->enq_count]=val;
+        tail->enq_count++;
     }
     else{
         struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
+        node->deq_count=0;
         node->value[0]=val;
         node->next=NULL;
-        node->val_count=1;
+        node->enq_count=1;
         Q->Tail->next=node;
         Q->Tail=node;
     }
@@ -100,36 +89,22 @@ void enqueue(struct queue_t * Q, int val){
 
 
 int dequeue(struct queue_t * Q, int * val){
-    
-    /*
-    struct node_t * node = Q->Head;
-    struct node_t * next = node->next;
-    //struct node_t * tail = Q->Tail;
-    if(next == NULL) return 0;
-    else{
-        *val = next->value;
-        Q->Head =next;
-    }
-    
-    free(node);
-    
-    return 1;
-    */
+
     struct node_t * head=Q->Head; //TODO: fix empty queue!!
     struct node_t * next=head->next;
-    if((head->val_count==0)&&(next==NULL))return 0;
-    if(head->val_count!=0){
-        head->val_count=head->val_count-1;
-        *val=head->value[head->val_count];
+    if((head->deq_count>=head->enq_count)&&(next==NULL))return 0;//queue is empty
+    if(head->deq_count<MAX_VALUES){
+        *val=head->value[head->deq_count];
+        head->deq_count++;
     }
     else{
         Q->Head=Q->Head->next;
         free(head);
         head=Q->Head;
         next=head->next;
-        if((next==NULL)&&(head->val_count==0)) return 0;
-        head->val_count=head->val_count-1;
-        *val=head->value[head->val_count];
+        //if((next==NULL)&&(head->val_count==0)) return 0;
+        head->deq_count=1;
+        *val=head->value[0];
     }
     return 1;
 }
@@ -188,7 +163,7 @@ void printqueue(struct queue_t * Q){
     curr = Q->Head;
     next = Q->Head->next;
     while (curr != Q->Tail){
-        for(i=0;i<curr->val_count;i++){
+        for(i=curr->deq_count;i<curr->enq_count;i++){
             printf("%d ",curr->value[i]);
         }
         curr = next;
@@ -232,6 +207,25 @@ int main(int argc, char *argv[]){
     //try_access(Q,pub,1,5,num_threads);
     //try_access(Q,pub,1,MAX_VALUES,num_threads);
 
+    /*try_access(Q,pub,1,2,num_threads);
+    try_access(Q,pub,1,4,num_threads);
+    try_access(Q,pub,1,8,num_threads);
+    try_access(Q,pub,1,9,num_threads);
+    try_access(Q,pub,1,12,num_threads);
+    res = try_access(Q,pub,0,9,num_threads);
+    printf("res = %d\n",res);
+    res = try_access(Q,pub,0,9,num_threads);
+    printf("res = %d\n",res);
+    res = try_access(Q,pub,0,9,num_threads);
+    printf("res = %d\n",res);
+    res = try_access(Q,pub,0,9,num_threads);
+    printf("res = %d\n",res);
+    res = try_access(Q,pub,0,9,num_threads);
+    printf("res = %d\n",res);
+    res = try_access(Q,pub,0,9,num_threads);
+    printf("res = %d\n",res);
+    printqueue(Q);
+    */
 srand(time(NULL));
     timer_tt * timer;
     int c,k;
@@ -244,6 +238,7 @@ srand(time(NULL));
     #pragma omp parallel for num_threads(num_threads) shared(Q) private(res,val,i,j,c,timer,k) reduction(+:total_time) reduction(+:sum) 
     for(i=0;i<num_threads;i++){
         c=50;
+        //printf("thread number %d cpuid %d\n",omp_get_thread_num(),sched_getcpu());
         timer=timer_init();
         timer_start(timer);
         sum=0;
@@ -272,6 +267,8 @@ srand(time(NULL));
    // printf("new sum %ld\n",sum);
     double avg_total_time=total_time/(double)num_threads;
     printf("avg total time %lf\n",avg_total_time);
+    timer_stop(glob_timer);
+    printf("glob timer %lf\n",timer_report_sec(glob_timer));
 /*    long int avg_sum=sum/num_threads;
     printf("avg sum %ld\n",avg_sum);
     timer_tt * timer2=timer_init();
