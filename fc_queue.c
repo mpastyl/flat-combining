@@ -9,7 +9,8 @@
 int MAX_VALUES=16;
 
 struct node_t{
-    int val_count;
+    int enq_count;
+    int deq_count;
     int value[16];//TODO: maybe change this
     struct node_t * next;
 };
@@ -85,122 +86,20 @@ void initialize(struct queue_t * Q,struct pub_record * pub0,struct pub_record * 
     }
 }
 
-/*
-void enqueue(struct queue_t * Q, int val){
-	
-    int store = 0;
-    struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
-    node->value =  val;
-    node->next = NULL;
-    //while(__sync_lock_test_and_set(&Q->lock,1));
-    //#pragma omp critical
-    
-    //struct node_t * tail = Q->Tail;
-    //tail->next =node;
-    Q->Tail->next=node;
-    Q->Tail = node;
-    
-    //__sync_lock_test_and_set(&Q->lock,0);
 
-}
-
-
-int dequeue(struct queue_t * Q, int * val){
-    
-    
-    struct node_t * node = Q->Head;
-    struct node_t * next = node->next;
-    //struct node_t * tail = Q->Tail;
-    if(next == NULL) return 0;
-    else{
-        *val = next->value;
-        Q->Head =next;
-    }
-    
-    free(node);
-    
-    return 1;
-           
-}
-*/
-
-/*
-void enqueue(struct queue_t * Q, int val){
-
-    struct pointer_t tail;
-    __int128 new_to_set;
-    int temp;
-    struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
-    node->value = val;
-    node->next.both = 0;
-    while (1){
-        tail = Q->Tail;
-        struct pointer_t next_p = ((struct node_t *)get_pointer(tail.both))->next;
-        if (tail.both == Q->Tail.both){
-            if (get_pointer(next_p.both) == 0){
-                new_to_set =set_both(new_to_set,node,get_count(next_p.both) +(__int128)1);
-                if (__sync_bool_compare_and_swap(&(((struct node_t * )get_pointer(tail.both))->next.both),next_p.both,new_to_set))
-                    break;
-            }
-            else{
-                new_to_set=set_both(new_to_set,next_p.both,get_count(tail.both)+(__int128)1);
-                temp = __sync_bool_compare_and_swap(&Q->Tail.both,tail.both,new_to_set);
-            }
-        }
-    }
-    new_to_set=set_both(new_to_set,node,get_count(tail.both)+(__int128)1);
-    temp = __sync_bool_compare_and_swap(&Q->Tail.both,tail.both,new_to_set);
-}
-
-
-
-int dequeue(struct queue_t * Q,int * pvalue){
-
-    struct pointer_t head;
-    struct pointer_t tail;
-    struct pointer_t next;
-    int  temp;
-    int first_val;
-    __int128 new_to_set;
-    while(1){
-        head =  Q->Head;
-        first_val=((struct node_t *)get_pointer(head.both))->value;
-        tail =  Q->Tail;
-        next =  ((struct node_t *)get_pointer(head.both))->next;
-        if ( head.both == Q->Head.both){
-            if (head.both == tail.both){
-                if ( get_pointer(next.both) == 0)
-                    return 0;
-                new_to_set =  set_both(new_to_set,next.both,get_count(tail.both) +(__int128)1);
-                temp = __sync_bool_compare_and_swap(&Q->Tail.both,tail.both,new_to_set);
-            }
-            else{
-                //if ((head==Q->Head) &&(first_val!=((struct node_t *)get_pointer(head))->value)) printf("change detected!\n");
-                *pvalue =((struct node_t *)get_pointer(next.both))->value;
-                new_to_set = set_both(new_to_set,next.both,get_count(head.both)+(__int128)1);
-                if( __sync_bool_compare_and_swap(&Q->Head.both,head.both,new_to_set))
-                    break;
-            }
-        }
-    }
-    //printf(" about to free %p \n",head);
-    free(get_pointer(head.both));
-    return 1;
-}
-
-*/
 void enqueue(struct queue_t * Q, int val){
 
     struct node_t *  tail=Q->Tail;
-    if(tail->val_count!=MAX_VALUES){// fat node not full
-        tail->value[tail->val_count]=val;
-        tail->val_count++;
+    if(tail->enq_count!=MAX_VALUES){// fat node not full
+        tail->value[tail->enq_count]=val;
+        tail->enq_count++;
     }
     else{
         struct node_t * node = (struct node_t *) malloc(sizeof(struct node_t));
+        node->deq_count=0;
         node->value[0]=val;
         node->next=NULL;
-        node->val_count=1;
+        node->enq_count=1;
         Q->Tail->next=node;
         Q->Tail=node;
     }
@@ -211,45 +110,22 @@ int dequeue(struct queue_t * Q, int * val){
 
     struct node_t * head=Q->Head; //TODO: fix empty queue!!
     struct node_t * next=head->next;
-    if((head->val_count==0)&&(next==NULL))return 0;
-    if(head->val_count!=0){
-        head->val_count=head->val_count-1;
-        *val=head->value[head->val_count];
+    if((head->deq_count>=head->enq_count)&&(next==NULL))return 0;//queue is empty
+    if(head->deq_count<MAX_VALUES){
+        *val=head->value[head->deq_count];
+        head->deq_count++;
     }
     else{
         Q->Head=Q->Head->next;
         free(head);
         head=Q->Head;
         next=head->next;
-        if((next==NULL)&&(head->val_count==0)) return 0;
-        head->val_count=head->val_count-1;
-        *val=head->value[head->val_count];
+        //if((next==NULL)&&(head->val_count==0)) return 0;
+        head->deq_count=1;
+        *val=head->value[0];
     }
     return 1;
 }
-/*
-void printqueue(struct queue_t * Q){
-
-    struct pointer_t curr ;
-    struct pointer_t next ;
-
-    curr = Q->Head;
-    //printf(" in printqueue curr = %p\n",curr);
-    next = ((struct node_t * )get_pointer(Q->Head.both))->next;
-    //printf(" in printqueue next = %p\n",next);
-    while ((get_pointer(curr.both) != get_pointer(Q->Tail.both))&&(get_pointer(curr.both)!=0)){
-    //printf(" in printqueue curr = %p\n",curr);
-    //printf(" in printqueue next = %p\n",next);
-        printf("%d ",((struct node_t * )get_pointer(curr.both))->value);
-        curr = next;
-        if (get_pointer(next.both)) next = ((struct node_t * )get_pointer(curr.both))->next;
-    }
-    //printf("%d ",((struct node_t * )get_pointer(curr))->value);
-    printf("\n");
-
-}
-*/
-
 
 int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
 
@@ -393,7 +269,7 @@ int main(int argc, char *argv[]){
         }
         timer_stop(timer);
         timer_val = timer_report_sec(timer);
-        printf("thread number %d total time %lf\n",omp_get_thread_num(),timer_val);
+        //printf("thread number %d total time %lf\n",omp_get_thread_num(),timer_val);
     }
     timer_stop(glob_timer);
     printf("average time  %lf\n",timer_val/(double)num_threads);
@@ -407,11 +283,11 @@ int main(int argc, char *argv[]){
             res=pub0[i].pending;
     }
     timer_stop(timer2);
-    printf("total delay %lf\n",timer_report_sec(timer2));
+    //printf("total delay %lf\n",timer_report_sec(timer2));
     //printqueue(Q);
 
-    printf("total enqs %ld\n",count_enqs);
-    printf("total deqs %ld\n",count_deqs);
+    //printf("total enqs %ld\n",count_enqs);
+    //printf("total deqs %ld\n",count_deqs);
     
     
     //------------------------------------------------------
