@@ -16,7 +16,10 @@ struct node_t{
 struct queue_t{
 	struct node_t * Head;
 	struct node_t * Tail;
-    int lock;
+    int lock_enq;
+    long long int temp;
+    long long int temp2;
+    int lock_deq;
 };
 
 
@@ -38,20 +41,7 @@ long long int glob_counter=0;
 
 long long int count_enqs=0;
 long long int count_deqs=0;
-void lock_queue (struct queue_t * Q){
 
-
-    while (1){
-        if (!Q->lock){
-            if(!__sync_lock_test_and_set(&(Q->lock),1)) break;
-        }
-    }   
-}
-
-void unlock_queue(struct queue_t * Q){
-
-    Q->lock = 0;
-}
 
 void initialize(struct queue_t * Q,struct pub_record * pub_enq,struct pub_record * pub_deq,int n){//TODO: init count?
 	int i;
@@ -61,7 +51,8 @@ void initialize(struct queue_t * Q,struct pub_record * pub_enq,struct pub_record
     node->deq_count=0;
 	Q->Head = node; //TODO: check this
 	Q->Tail = node;
-    Q->lock = 0;
+    Q->lock_enq = 0;
+    Q->lock_deq = 0;
     for(i=0; i <n ;i++){
         pub_enq[i].pending = 0;
         pub_enq[i].response =0;
@@ -86,6 +77,7 @@ void enqueue(struct queue_t * Q, int val){
         node->enq_count=1;
         Q->Tail->next=node;
         Q->Tail=node;
+        tail->enq_count++;
     }
 }
 
@@ -94,7 +86,15 @@ int dequeue(struct queue_t * Q, int * val){
 
     struct node_t * head=Q->Head; //TODO: fix empty queue!!
     struct node_t * next=head->next;
-    if((head->deq_count>=head->enq_count)&&(next==NULL))return 0;//queue is empty
+
+    /*if(head->enq_count==head->deq_count){
+        if(__sync_bool_compare_and_swap(&head->enq_count,head->deq_count,head->deq_count)) {
+            return 0;
+        }
+    }
+    */
+    if (head->enq_count==head->deq_count) return 0;
+    if((head->deq_count>=head->enq_count)&&(next==NULL)){printf("i used this\n");return 0;}//queue is empty
     if(head->deq_count<MAX_VALUES){
         *val=head->value[head->deq_count];
         head->deq_count++;
@@ -111,18 +111,17 @@ int dequeue(struct queue_t * Q, int * val){
     return 1;
 }
 
-int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
+int try_access_enq(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
 
     int tid=  omp_get_thread_num();
     int i,res,count;
     //1
     
-    
     pub[tid].op = operation;
     pub[tid].val = val;
     pub[tid].pending=1;
     while (1){
-        if(Q->lock){
+        if(Q->lock_enq){
             count=0;
             while((!pub[tid].response)&&(count<10000000)) count++; //check periodicaly for lock
             if(pub[tid].response ==1){
@@ -131,7 +130,7 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
             }
         }
         else{
-            if(__sync_lock_test_and_set(&(Q->lock),1)) continue;// must spin backto response
+            if(__sync_lock_test_and_set(&(Q->lock_enq),1)) continue;// must spin backto response
             else{
                 glob_counter++;
                 for(i=0 ;i<n; i++){
@@ -150,12 +149,58 @@ int try_access(struct queue_t * Q,struct pub_record *  pub,int operation, int va
                 }
                 int temp_val=pub[tid].val;
                 pub[tid].response=0;
-                Q->lock=0;
+                Q->lock_enq=0;
                 return temp_val;
             }
         }
    }
 }
+
+int try_access_deq(struct queue_t * Q,struct pub_record *  pub,int operation, int val,int n){
+
+    int tid=  omp_get_thread_num();
+    int i,res,count;
+    //1
+    
+    pub[tid].op = operation;
+    pub[tid].val = val;
+    pub[tid].pending=1;
+    while (1){
+        if(Q->lock_deq){
+            count=0;
+            while((!pub[tid].response)&&(count<10000000)) count++; //check periodicaly for lock
+            if(pub[tid].response ==1){
+                pub[tid].response=0;
+                return (pub[tid].val);
+            }
+        }
+        else{
+            if(__sync_lock_test_and_set(&(Q->lock_deq),1)) continue;// must spin backto response
+            else{
+                glob_counter++;
+                for(i=0 ;i<n; i++){
+                    if(pub[i].pending){
+                        if (pub[i].op ==1) {count_enqs++; enqueue(Q,pub[i].val);}
+                        else if(pub[i].op==0){
+                           count_deqs++;
+                           res=dequeue(Q,&pub[i].val);
+                           if(!res) 
+                                    pub[i].val = ERROR_VALUE;
+                        }
+                        else printf("wtf!!  %d \n",pub[i].op);
+                        pub[i].pending = 0;
+                        pub[i].response = 1;
+                    }
+                }
+                int temp_val=pub[tid].val;
+                pub[tid].response=0;
+                Q->lock_deq=0;
+                return temp_val;
+            }
+        }
+   }
+}
+
 
 void printqueue(struct queue_t * Q){
     
@@ -246,12 +291,12 @@ srand(time(NULL));
         timer_start(timer);
         sum=0;
          for (j=0;j<count/num_threads;j++){
-                try_access(Q,pub_enq,1,i,num_threads);
+                try_access_enq(Q,pub_enq,1,i,num_threads);
                 sum+=c;
                 for(k=0;k<c;k++);
-                res = try_access(Q,pub_deq,0,9,num_threads);
+                res = try_access_deq(Q,pub_deq,0,9,num_threads);
                 if(res==ERROR_VALUE) printf("%d\n",res);
-                //else printf("thread %d  dequeued --> %d\n",omp_get_thread_num(),res);
+                //if (res) printf("thread %d  dequeued --> %d\n",omp_get_thread_num(),res);
          }
          timer_stop(timer);
          total_time=timer_report_sec(timer);
@@ -293,7 +338,7 @@ srand(time(NULL));
     timer_stop(glob_timer);
     printf("test delay %lf/n",timer_report_sec(glob_timer));
     */
-    printqueue(Q);
+    //printqueue(Q);
     //timer_stop(timer);
     //printf("num_threasd %d  enq-deqs total %d \n",num_threads,count);
     //printf("Total time  %lf \n",time_res);
